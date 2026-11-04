@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graphe WORK Épinay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout : graphe nodal plein écran, grappes organiques tirées par une simulation de forces ; deux bandeaux texte en surimpression */
+:root{
+  --bg:#08090B; --panel:#0D1014; --grid:#14181D;
+  --fg:#C9D1D9; --dim:#6B7682;
+  --sys:#6CC5E8; --md:#8FD18A; --reason:#E8B65C; --skill:#D38BE0;
+  --conn:#7FA7F5; --disk:#A3ADB7; --mem:#5FD4C0; --out:#F08A72;
+  --mono:'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  color-scheme:dark;
+}
+html,body{height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--mono);overflow:hidden}
+#stage{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;
+  background-image:radial-gradient(var(--grid) 1px, transparent 1px);background-size:22px 22px}
+#stage:active{cursor:grabbing}
+.hud{position:fixed;z-index:2;pointer-events:none;font-size:12px;line-height:18px;max-width:calc(100% - 32px)}
+.hud.top{top:calc(14px + env(safe-area-inset-top,0px));left:max(16px,env(safe-area-inset-left,0px))}
+.hud.bot{bottom:calc(12px + env(safe-area-inset-bottom,0px));right:max(16px,env(safe-area-inset-right,0px));color:var(--dim);text-align:right}
+.prompt{color:var(--fg);font-weight:600;font-size:13px}
+.prompt b{color:var(--md);font-weight:600}
+.cur{display:inline-block;width:8px;height:14px;background:var(--md);vertical-align:-2px;margin-left:4px;animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.legend{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px 14px;color:var(--dim)}
+.legend span i{font-style:normal}
+.k-sys{color:var(--sys)}.k-md{color:var(--md)}.k-reason{color:var(--reason)}.k-skill{color:var(--skill)}
+.k-conn{color:var(--conn)}.k-disk{color:var(--disk)}.k-mem{color:var(--mem)}.k-out{color:var(--out)}
+.node rect{fill:var(--panel);stroke-width:1}
+.node text{font-family:var(--mono);font-size:12px;dominant-baseline:central;text-anchor:middle}
+.node.hub text{font-size:13px;font-weight:600}
+.node.hub rect{stroke-width:1.6}
+.node{cursor:pointer}
+.edge{fill:none;stroke-width:1}
+.edge.link{stroke:var(--dim);stroke-dasharray:1 4;stroke-linecap:round;opacity:.75}
+.edge.flow{stroke:var(--reason);stroke-width:1.3;stroke-dasharray:6 5;animation:flow 1.6s linear infinite;opacity:.9}
+.edge.mirror{stroke:var(--disk);stroke-dasharray:10 4 2 4;opacity:.85}
+@keyframes flow{to{stroke-dashoffset:-22}}
+.glabel{font-family:var(--mono);font-size:11px;fill:var(--dim);text-anchor:middle;letter-spacing:.06em}
+svg.focus .node:not(.on){opacity:.18}
+svg.focus .edge:not(.on){opacity:.06}
+svg.focus .glabel{opacity:.3}
+@media (prefers-reduced-motion:reduce){.edge.flow,.cur{animation:none}}
+@media (max-width:560px){.legend{font-size:11px;gap:2px 10px}.hud.bot{display:none}}
+</style>
+<style>body{margin:0}</style>
+</head>
+<body>
+
+<svg id="stage" role="img" aria-label="Graphe des fichiers, du prompt système, des étapes de raisonnement et des skills de l'espace WORK"></svg>
+
+<div class="hud top">
+  <div class="prompt">$ graph <b>WORK/</b> --epinay-sous-senart<span class="cur" aria-hidden="true"></span></div>
+  <div class="legend">
+    <span class="k-sys">## prompt système</span>
+    <span class="k-md">.md base</span>
+    <span class="k-reason">{ } raisonnement</span>
+    <span class="k-skill">/ skills</span>
+    <span class="k-conn">@ connecteurs</span>
+    <span class="k-mem">~ mémoire</span>
+    <span class="k-disk">C:\ disque</span>
+    <span class="k-out">&gt; sorties</span>
+  </div>
+</div>
+<div class="hud bot">glisser un nœud · molette ou pincer pour zoomer · survol : voisins<br><span class="k-reason">───</span> trajet · <span class="k-disk">─ ·</span> copie miroir · <span>· · ·</span> lien</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+(function(){
+const G = {sys:'--sys',md:'--md',reason:'--reason',skill:'--skill',conn:'--conn',disk:'--disk',mem:'--mem',out:'--out'};
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+const nodes = [];
+const add = (id,g,label,hub) => nodes.push({id,g,label:label||id,hub:!!hub});
+
+// prompt système
+add('system_prompt','sys','system_prompt',true);
+add('instructions_projet','sys','instructions_projet');
+add('userPreferences','sys','userPreferences');
+add('historique','sys','historique_conversations');
+// mémoire
+add('memoire','mem','memoire/',true);
+['profile.md','index.md','automatisation-make.md','budget-service-communication.md','cv-personnel.md','marche-impression-2026.md','spinogenerator.md']
+  .forEach(f=>add('mem:'+f,'mem',f));
+// raisonnement
+const R = ['analyse_demande','choix_sources','verification_faits','redaction','controle_§11','livraison'];
+R.forEach(r=>add(r,'reason',r));
+// référentiel + base
+add('referentiel','md','epinay-sous-senart_referentiel_redactionnel.md',true);
+add('00_INDEX','md','00_INDEX.md',true);
+const KB = ['01_annuaire_lieux_contacts','02_elus_instances_2026','03_identite_histoire_territoire','04_chronologie_2020-2026','05_glossaire_sigles','06_demarches_pratiques','07_partenaires_intercommunalite','10_budget_finances','11_tzcld_emploi_insertion','12_renovation_urbaine_npnru_logement','13_urbanisme_grands_projets','14_securite_police_municipale','15_education_enfance_cite_educative','16_petite_enfance','17_jeunesse_cme_cmj','18_culture_mac','19_sports','20_seniors','21_solidarite_sante_ccas','22_centre_socioculturel_josephine_baker','23_yerres_environnement_cadre_de_vie','24_evenements_recurrents','25_vie_associative','26_communication_municipale','27_facebook_posts_references','28_facebook_historique_2016-2022','29_facebook_historique_2023-2026','30_facebook_calendrier_editorial','99_points_a_verifier'];
+KB.forEach(k=>add(k,'md',k+'.md'));
+// skills
+add('skills','skill','skills/',true);
+['post-reseaux','docx','pdf','pptx','xlsx','frontend-design','artifact-design','deep-research','adobe-for-creativity','postiz','design:ux-copy']
+  .forEach(s=>add('sk:'+s,'skill',s));
+// connecteurs
+add('connecteurs','conn','connecteurs/',true);
+['make','google_drive','adobe','claude_docs','navigateur'].forEach(c=>add('co:'+c,'conn',c));
+// disque
+add('iazone','disk','C:\\…\\IAZONE\\',true);
+add('prompt_v2','disk','prompt_redactionnel_epinay_v2.md');
+add('save_conso','disk','save\\consolidation\\');
+add('d_spino','disk','spinomag\\ ×32');
+add('d_guides','disk','guides\\ ×10');
+add('d_site','disk','site\\ ×15');
+add('d_fb','disk','facebook\\');
+add('d_suivi','disk','_SUIVI.md');
+add('d_transc','disk','transcriptions\\');
+// sorties
+['spinomag','site_web','neocity','facebook','instagram'].forEach(o=>add('o:'+o,'out',o));
+
+const links = [];
+const L = (s,t,type) => links.push({source:s,target:t,type:type||'link'});
+['instructions_projet','userPreferences','historique','memoire','skills','connecteurs'].forEach(t=>L('system_prompt',t));
+L('system_prompt','analyse_demande','flow');
+nodes.filter(n=>n.id.startsWith('mem:')).forEach(n=>L('memoire',n.id));
+L('instructions_projet','referentiel'); L('instructions_projet','00_INDEX');
+for(let i=0;i<R.length-1;i++) L(R[i],R[i+1],'flow');
+L('choix_sources','00_INDEX','flow');
+['01_annuaire_lieux_contacts','02_elus_instances_2026','05_glossaire_sigles','99_points_a_verifier'].forEach(t=>L('verification_faits',t,'flow'));
+L('redaction','referentiel','flow'); L('redaction','skills','flow'); L('controle_§11','referentiel','flow');
+KB.forEach(k=>L('00_INDEX',k));
+nodes.filter(n=>n.id.startsWith('sk:')).forEach(n=>L('skills',n.id));
+['referentiel','27_facebook_posts_references','30_facebook_calendrier_editorial','01_annuaire_lieux_contacts'].forEach(t=>L('sk:post-reseaux',t));
+nodes.filter(n=>n.id.startsWith('co:')).forEach(n=>L('connecteurs',n.id));
+nodes.filter(n=>n.id.startsWith('o:')).forEach(n=>L('livraison',n.id,'flow'));
+L('sk:postiz','o:facebook'); L('co:make','d_fb');
+['prompt_v2','save_conso','d_spino','d_guides','d_site','d_fb','d_suivi','d_transc'].forEach(t=>L('iazone',t));
+L('referentiel','prompt_v2','mirror'); L('00_INDEX','save_conso','mirror');
+L('redaction','d_transc','mirror');
+['d_spino','d_guides','d_site','d_fb'].forEach(s=>L(s,'save_conso'));
+
+// ancres des grappes
+const A = {sys:[0,-40],mem:[-260,-420],reason:[60,230],md:[-640,40],skill:[520,-300],conn:[700,80],disk:[-420,560],out:[520,520]};
+const prefix = {md:'',sys:'## ',reason:'{ ',skill:'/',conn:'@',disk:'',mem:'~/',out:'> '};
+const suffix = {reason:' }'};
+nodes.forEach(n=>{
+  if(!n.hub) n.text = (prefix[n.g]||'') + n.label + (suffix[n.g]||'');
+  else n.text = '[ ' + n.label + ' ]';
+});
+
+const svg = d3.select('#stage');
+const root = svg.append('g');
+const gLabels = root.append('g');
+const gEdges = root.append('g');
+const gNodes = root.append('g');
+
+function measure(){
+  const c = document.createElement('canvas').getContext('2d');
+  nodes.forEach(n=>{
+    c.font = (n.hub?'600 13px ':'400 12px ') + css('--mono');
+    n.w = Math.ceil(c.measureText(n.text).width) + (n.hub?28:20);
+    n.h = n.hub ? 30 : 24;
+  });
+}
+
+// collision rectangulaire
+function rectCollide(pad){
+  let ns;
+  function force(alpha){
+    for(let i=0;i<ns.length;i++){
+      const a = ns[i];
+      for(let j=i+1;j<ns.length;j++){
+        const b = ns[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const ox = (a.w + b.w)/2 + pad - Math.abs(dx);
+        const oy = (a.h + b.h)/2 + pad - Math.abs(dy);
+        if(ox>0 && oy>0){
+          if(ox < oy){ const s=(dx<0?-1:1)*ox*0.5; a.x-=s; b.x+=s; }
+          else { const s=(dy<0?-1:1)*oy*0.5; a.y-=s; b.y+=s; }
+        }
+      }
+    }
+  }
+  force.initialize = _ => ns = _;
+  return force;
+}
+
+function build(){
+  measure();
+  // positions initiales autour des ancres, avec un léger désordre
+  nodes.forEach((n,i)=>{ const a=A[n.g]; n.x=a[0]+Math.cos(i*2.4)*90; n.y=a[1]+Math.sin(i*2.4)*70; });
+
+  const sim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d=>d.id)
+      .distance(l=> l.type==='mirror'?260 : (l.source.g===l.target.g? 70 : 180))
+      .strength(l=> l.source.g===l.target.g? .6 : .12))
+    .force('charge', d3.forceManyBody().strength(d=>d.hub?-520:-150))
+    .force('x', d3.forceX(d=>A[d.g][0]).strength(.07))
+    .force('y', d3.forceY(d=>A[d.g][1]).strength(.07))
+    .force('rect', rectCollide(10))
+    .stop();
+  for(let i=0;i<420;i++) sim.tick();
+
+  const color = g => css(G[g]);
+
+  const edge = gEdges.selectAll('line').data(links).join('line')
+    .attr('class',d=>'edge '+d.type);
+
+  const node = gNodes.selectAll('g').data(nodes).join('g')
+    .attr('class',d=>'node'+(d.hub?' hub':''))
+    .attr('tabindex',0)
+    .attr('aria-label',d=>d.label);
+  node.append('rect')
+    .attr('x',d=>-d.w/2).attr('y',d=>-d.h/2).attr('width',d=>d.w).attr('height',d=>d.h)
+    .attr('rx',2).style('stroke',d=>color(d.g));
+  node.append('text').text(d=>d.text).style('fill',d=>color(d.g));
+
+  const groups = [
+    ['md','// consolidation/ · 31 .md'],['sys','// prompt système'],['reason','// bloc de raisonnement'],
+    ['skill','// skills'],['conn','// connecteurs'],['mem','// mémoire'],['disk','// disque local'],['out','// sorties']
+  ];
+  const glabel = gLabels.selectAll('text').data(groups).join('text').attr('class','glabel').text(d=>d[1]);
+
+  function render(){
+    edge.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+    node.attr('transform',d=>`translate(${d.x},${d.y})`);
+    glabel.each(function(d){
+      const ms = nodes.filter(n=>n.g===d[0]);
+      const minY = d3.min(ms,n=>n.y-n.h/2), cx = d3.mean(ms,n=>n.x);
+      d3.select(this).attr('x',cx).attr('y',minY-16);
+    });
+  }
+  render();
+  sim.on('tick',render);
+
+  // voisinage
+  const nb = new Map(nodes.map(n=>[n.id,new Set([n.id])]));
+  links.forEach(l=>{ nb.get(l.source.id).add(l.target.id); nb.get(l.target.id).add(l.source.id); });
+  function focus(d){
+    if(!d){ svg.classed('focus',false); node.classed('on',false); edge.classed('on',false); return; }
+    const s = nb.get(d.id);
+    svg.classed('focus',true);
+    node.classed('on',n=>s.has(n.id));
+    edge.classed('on',l=>l.source.id===d.id||l.target.id===d.id);
+  }
+  node.on('mouseenter focus',(e,d)=>focus(d)).on('mouseleave blur',()=>focus(null));
+
+  node.call(d3.drag()
+    .on('start',(e,d)=>{ if(!e.active) sim.alphaTarget(.25).restart(); d.fx=d.x; d.fy=d.y; })
+    .on('drag',(e,d)=>{ d.fx=e.x; d.fy=e.y; })
+    .on('end',(e,d)=>{ if(!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }));
+
+  // zoom + cadrage initial
+  const zoom = d3.zoom().scaleExtent([.15,3]).on('zoom',e=>root.attr('transform',e.transform));
+  svg.call(zoom).on('dblclick.zoom',null);
+  function fit(){
+    const W = svg.node().clientWidth, H = svg.node().clientHeight;
+    const x0=d3.min(nodes,n=>n.x-n.w/2), x1=d3.max(nodes,n=>n.x+n.w/2);
+    const y0=d3.min(nodes,n=>n.y-n.h/2)-30, y1=d3.max(nodes,n=>n.y+n.h/2);
+    const top = W<560 ? 96 : 76;
+    const k = Math.min((W-40)/(x1-x0), (H-top-40)/(y1-y0), 1.2);
+    const tx = W/2 - k*(x0+x1)/2, ty = top + (H-top-20)/2 - k*(y0+y1)/2;
+    svg.call(zoom.transform, d3.zoomIdentity.translate(tx,ty).scale(k));
+  }
+  fit();
+  let t; window.addEventListener('resize',()=>{ clearTimeout(t); t=setTimeout(fit,150); });
+}
+
+let done=false;
+const go=()=>{ if(!done){ done=true; build(); } };
+(document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(go);
+setTimeout(go,1500);
+})();
+</script>
+</body>
+</html>
